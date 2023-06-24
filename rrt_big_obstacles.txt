@@ -3,6 +3,9 @@ import numpy as np
 import math
 import random
 import copy
+import time
+
+start_time = time.time()
 
 
 class Node:
@@ -169,13 +172,22 @@ class RRT:
             self.navigate_path(path)
         self.land()
 
+    def calculate_path_length(self, path):
+        total_distance = 0.0
+        for i in range(len(path) - 1):
+            x1, y1 = path[i]
+            x2, y2 = path[i + 1]
+            distance = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            total_distance += distance
+        return total_distance
+
 
 # Παραδείγματα χρήσης
 def main():
     # Ορισμός στόχων και εμποδίων
     start = (1, 1)  # Αρχικό σημείο
     goal = (30, 30)  # Σημείο προορισμού
-    obstacle_list = (20, 20, 10)  # Λίστα με τα εμπόδια (κάθε εμπόδιο είναι μια τριάδα (x, y, size))
+    obstacle_list = [(20, 20, 10)]  # Λίστα με τα εμπόδια (κάθε εμπόδιο είναι μια τριάδα (x, y, size))
     map_min_x = -50
     map_max_x = 50
     map_min_y = 50
@@ -183,9 +195,20 @@ def main():
     # Παράμετροι του αλγορίθμου RRT
     rrt = RRT(start, goal, obstacle_list, rand_area=[map_min_x, map_max_x, map_min_y, map_max_y], expand_dis=3.0,
               goal_sample_rate=20, max_iter=500)
-    # Εκτέλεση του αλγορίθμου και πλοήγηση του drone στο βραχυπρόθεσμο μονοπάτι που παρήχθη
+    path = rrt.planning()
+    if path is not None:
+        length = rrt.calculate_path_length(path)  # Υπολογισμός του μήκους του μονοπατιού
+        print("Μήκος διαδρομής με τον αλγόριθμο RRT*: ", length)
     rrt.execute()
+
+    # Εκτέλεση της μεθόδου planning() για να λάβουμε το μονοπάτι
+
 
 
 if __name__ == '__main__':
     main()
+
+end_time = time.time()
+execution_time = end_time - start_time
+
+print("Ο χρόνος εκτέλεσης ήταν:", execution_time, "δευτερόλεπτα")
