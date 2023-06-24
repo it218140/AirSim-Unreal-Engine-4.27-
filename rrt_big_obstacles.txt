@@ -1,0 +1,191 @@
+import airsim
+import numpy as np
+import math
+import random
+import copy
+
+
+class Node:
+    def __init__(self, x, y, cost=0.0):
+        self.x = x
+        self.y = y
+        self.cost = cost
+        self.parent = None
+        self.parent_index = None
+
+
+class RRT:
+    def __init__(self, start, goal, obstacle_list, rand_area, expand_dis=3.0, path_resolution=0.5,
+                 goal_sample_rate=20, max_iter=500):
+        self.goal = Node(goal[0], goal[1])
+        self.start = Node(start[0], start[1], 0.0)
+        self.min_rand = rand_area[0]
+        self.max_rand = rand_area[1]
+        self.expand_dis = expand_dis
+        self.path_resolution = path_resolution
+        self.goal_sample_rate = goal_sample_rate
+        self.max_iter = max_iter
+        self.obstacle_list = obstacle_list
+        self.node_list = [self.start]
+        self.drone_size = 1.0
+        self.client = airsim.MultirotorClient()
+
+    def planning(self):
+        for i in range(self.max_iter):
+            rnd_node = self.get_random_node()
+            nearest_ind = self.get_nearest_node_index(self.node_list, rnd_node)
+            nearest_node = self.node_list[nearest_ind]
+            new_node = self.steer(nearest_node, rnd_node, self.expand_dis)
+
+            if self.check_collision(new_node, self.obstacle_list):
+                new_node.parent = nearest_node
+                new_node.parent_index = nearest_ind
+                self.node_list.append(new_node)
+            if i % 5 == 0:
+                self.draw_graph(rnd_node)
+
+            if self.calc_distance(new_node, self.goal) <= self.expand_dis:
+                final_node = self.steer(new_node, self.goal, self.expand_dis)
+                if self.check_collision(final_node, self.obstacle_list):
+                    final_node.parent = new_node
+                    final_node.parent_index = len(self.node_list) - 1
+                    return self.generate_final_course(len(self.node_list) - 1)
+
+            if i % 10 == 0:
+                print("Iter:", i, ", Number of nodes:", len(self.node_list))
+
+        return None  # Αν δεν βρεθεί μονοπάτι
+
+    def steer(self, from_node, to_node, extend_length=float("inf")):
+        new_node = copy.deepcopy(from_node)
+        d, theta = self.calc_distance_and_angle(new_node, to_node)
+        new_node.cost += d
+        extend_length = min(extend_length, d)
+        new_node.x += extend_length * math.cos(theta)
+        new_node.y += extend_length * math.sin(theta)
+        return new_node
+
+    def generate_final_course(self, goal_ind):
+        #  path = Node(self.goal.x, self.goal.y)
+        path = []
+        node = self.node_list[goal_ind]
+        while node.parent is not None:
+            path.append([node.x, node.y])
+            node = node.parent
+        path.append([self.start.x, self.start.y])
+        return path
+
+    def calc_distance_and_angle(self, from_node, to_node):
+        dx = to_node.x - from_node.x
+        dy = to_node.y - from_node.y
+        d = math.hypot(dx, dy)
+        theta = math.atan2(dy, dx)
+        return d, theta
+
+    def calc_distance(self, from_node, to_node):
+        dx = to_node.x - from_node.x
+        dy = to_node.y - from_node.y
+        return math.hypot(dx, dy)
+
+    def get_random_node(self):
+        if random.randint(0, 100) > self.goal_sample_rate:
+            rnd = Node(random.uniform(self.min_rand, self.max_rand), random.uniform(self.min_rand, self.max_rand), 0.0)
+
+        else:  # goal point sampling
+            rnd = Node(self.goal.x, self.goal.y)
+        return rnd
+
+    def get_nearest_node_index(self, node_list, rnd_node):
+        dlist = [(node.x - rnd_node.x) ** 2 + (node.y - rnd_node.y) ** 2 for node in node_list]
+        minind = dlist.index(min(dlist))
+        return minind
+
+    def check_collision(self, node, obstacle_list):
+        if node is None:
+            return False
+
+        for (ox, oy, size) in obstacle_list:
+            dx = ox - node.x
+            dy = oy - node.y
+            d = math.hypot(dx, dy)
+            if d <= size + self.drone_size:
+                return False  # collision
+
+        return True  # safe
+
+    def draw_graph(self, rnd=None):
+        try:
+            import matplotlib.pyplot as plt
+            plt.clf()
+            if rnd is not None:
+                plt.plot(rnd.x, rnd.y, "^k")
+            for node in self.node_list:
+                if node.parent is not None:
+                    plt.plot([node.x, self.node_list[node.parent_index].x],
+                             [node.y, self.node_list[node.parent_index].y], "-g")
+
+            for (ox, oy, size) in self.obstacle_list:
+                circle = plt.Circle((ox, oy), size, color='r')
+                plt.gcf().gca().add_artist(circle)
+
+            plt.plot(self.start.x, self.start.y, "xr")
+            plt.plot(self.goal.x, self.goal.y, "xb")
+            plt.axis("equal")
+            plt.axis([-50, 50, -50, 50])
+            plt.grid(True)
+            plt.pause(0.01)
+        except:
+            pass
+
+    def run(self):
+        path = self.planning()
+        if path is not None:
+            print("Found path!")
+            print(path)
+            self.draw_graph()
+        else:
+            print("Failed to find a path.")
+
+    def takeoff(self):
+        self.client.confirmConnection()
+        self.client.enableApiControl(True)
+        self.client.armDisarm(True)
+        self.client.takeoffAsync().join()
+
+    def navigate_path(self, path):
+        self.client.moveToPositionAsync(self.start.x, self.start.y, 0, velocity=5).join()
+        for waypoint in path:
+            self.client.moveToPositionAsync(waypoint[0], waypoint[1], 0, velocity=5).join()
+
+    def land(self):
+        self.client.landAsync().join()
+        self.client.armDisarm(False)
+        self.client.enableApiControl(False)
+
+    def execute(self):
+        self.takeoff()
+        path = self.planning()
+        if path is not None:
+            self.navigate_path(path)
+        self.land()
+
+
+# Παραδείγματα χρήσης
+def main():
+    # Ορισμός στόχων και εμποδίων
+    start = (1, 1)  # Αρχικό σημείο
+    goal = (30, 30)  # Σημείο προορισμού
+    obstacle_list = (20, 20, 10)  # Λίστα με τα εμπόδια (κάθε εμπόδιο είναι μια τριάδα (x, y, size))
+    map_min_x = -50
+    map_max_x = 50
+    map_min_y = 50
+    map_max_y = -50
+    # Παράμετροι του αλγορίθμου RRT
+    rrt = RRT(start, goal, obstacle_list, rand_area=[map_min_x, map_max_x, map_min_y, map_max_y], expand_dis=3.0,
+              goal_sample_rate=20, max_iter=500)
+    # Εκτέλεση του αλγορίθμου και πλοήγηση του drone στο βραχυπρόθεσμο μονοπάτι που παρήχθη
+    rrt.execute()
+
+
+if __name__ == '__main__':
+    main()
